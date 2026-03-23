@@ -1,0 +1,42 @@
+name: SBOM POC (Syft)
+
+on: [push]
+
+jobs:
+  build-k8s:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout K8s
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21' 
+
+      - name: Build kube-apiserver
+        run: |
+          make WHAT=cmd/kube-apiserver
+
+      - name: Build Container Image
+        run: |
+          docker build -t k8s-apiserver:poc -f - . <<EOF
+          FROM debian:bookworm-slim
+          RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+          COPY _output/bin/kube-apiserver /usr/local/bin/
+          EOF
+
+      - name: Generate SBOM (Syft)
+        uses: anchore/sbom-action@v0
+        with:
+          image: k8s-apiserver:poc
+          format: 'cyclonedx-json'
+          output-file: 'k8s-apiserver.sbom.json'
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: poc-k8s-sbom
+          path: k8s-apiserver.sbom.json
