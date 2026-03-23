@@ -51,5 +51,5 @@ jobs:
         with:
           subject-name: ghcr.io/${{ github.repository_owner }}/kube-apiserver
           subject-digest: ${{ steps.build-image.outputs.digest }}
-          subject-path: 'k8s-apiserver.sbom.json'
+          sbom-path: 'k8s-apiserver.sbom.json'
           push-to-registry: true
