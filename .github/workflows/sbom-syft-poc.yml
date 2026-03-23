@@ -11,32 +11,41 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
         with:
-          go-version: '1.21' 
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build kube-apiserver
         run: |
           make WHAT=cmd/kube-apiserver
 
-      - name: Build Container Image
+      - name: Build and Push Container Image
+        id: build-image
         run: |
-          docker build -t k8s-apiserver:poc -f - . <<EOF
+          IMAGE_NAME=ghcr.io/${{ github.repository_owner }}/kube-apiserver:poc
+          docker build -t $IMAGE_NAME -f - . <<EOF
           FROM debian:bookworm-slim
           RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
           COPY _output/bin/kube-apiserver /usr/local/bin/
           EOF
+          docker push $IMAGE_NAME
+          # Capture the digest for the SBOM attestation
+          echo "digest=$(docker inspect --format='{{index .RepoDigests 0}}' $IMAGE_NAME)" >> $GITHUB_OUTPUT
 
       - name: Generate SBOM (Syft)
         uses: anchore/sbom-action@v0
         with:
-          image: k8s-apiserver:poc
+          image: ghcr.io/${{ github.repository_owner }}/kube-apiserver:poc
           format: 'cyclonedx-json'
           output-file: 'k8s-apiserver.sbom.json'
 
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
+      - name: Publish SBOM Attestation to GHCR
+        uses: actions/attest@v1  # This "attaches" the SBOM to the image
         with:
-          name: poc-k8s-sbom
-          path: k8s-apiserver.sbom.json
+          subject-name: ghcr.io/${{ github.repository_owner }}/kube-apiserver
+          subject-digest: ${{ steps.build-image.outputs.digest }}
+          sbom-path: 'k8s-apiserver.sbom.json'
+          push-to-registry: true
