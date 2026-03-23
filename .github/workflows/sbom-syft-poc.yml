@@ -39,17 +39,11 @@ jobs:
           # Capture the digest for the SBOM attestation
           echo "digest=$(docker inspect --format='{{index .RepoDigests 0}}' $IMAGE_NAME)" >> $GITHUB_OUTPUT
 
-      - name: Generate SBOM (Syft)
+      - name: Generate and Push SBOM (Syft)
         uses: anchore/sbom-action@v0
         with:
           image: ghcr.io/${{ github.repository_owner }}/kube-apiserver:poc
           format: 'cyclonedx-json'
           output-file: 'k8s-apiserver.sbom.json'
-
-      - name: Publish SBOM Attestation to GHCR
-        uses: actions/attest@v1  # This "attaches" the SBOM to the image
-        with:
-          subject-name: ghcr.io/${{ github.repository_owner }}/kube-apiserver
-          subject-digest: ${{ steps.build-image.outputs.digest }}
-          sbom-path: 'k8s-apiserver.sbom.json'
+          upload-release-assets: false 
           push-to-registry: true
