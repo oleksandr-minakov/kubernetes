@@ -48,6 +48,7 @@ jobs:
           image: ghcr.io/${{ github.repository_owner }}/kube-apiserver:poc
           format: 'cyclonedx-json'
           artifact-name: 'k8s-apiserver.sbom.json'
+          output-file: './k8s-apiserver.sbom.json'
 
       - name: Push SBOM to GHCR using ORAS
         run: |
@@ -57,4 +58,4 @@ jobs:
           # Push the SBOM file as an OCI artifact attached to the image
           oras attach --artifact-type application/vnd.cyclonedx+json \
             $IMAGE_REF \
-            k8s-apiserver.sbom.json
+            ./k8s-apiserver.sbom.json
