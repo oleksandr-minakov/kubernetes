@@ -52,7 +52,7 @@ jobs:
       - name: Push SBOM to GHCR using ORAS
         run: |
           # The image digest from the build step
-          IMAGE_REF=${{ steps.build.outputs.digest }}
+          IMAGE_REF=${{ steps.build-image.outputs.digest }}
           
           # Push the SBOM file as an OCI artifact attached to the image
           oras attach --artifact-type application/vnd.cyclonedx+json \
