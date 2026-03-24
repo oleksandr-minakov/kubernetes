@@ -1,0 +1,61 @@
+name: SBOM POC (Syft)
+
+on: [push]
+
+jobs:
+  build-k8s:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # Required for attestations
+    steps:
+      - name: Checkout K8s
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup ORAS
+        uses: oras-project/setup-oras@v1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build kube-apiserver
+        run: |
+          make WHAT=cmd/kube-apiserver
+
+      - name: Build and Push Container Image
+        id: build-image
+        run: |
+          IMAGE_NAME=ghcr.io/${{ github.repository_owner }}/kube-apiserver:poc
+          docker build -t $IMAGE_NAME -f - . <<EOF
+          FROM debian:bookworm-slim
+          RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+          COPY _output/bin/kube-apiserver /usr/local/bin/
+          EOF
+          docker push $IMAGE_NAME
+          # Capture the digest for the SBOM attestation
+          echo "digest=$(docker inspect --format='{{index .RepoDigests 0}}' $IMAGE_NAME)" >> $GITHUB_OUTPUT
+
+      - name: Generate SBOM (Syft)
+        uses: anchore/sbom-action@v0
+        with:
+          image: ghcr.io/${{ github.repository_owner }}/kube-apiserver:poc
+          format: 'cyclonedx-json'
+          artifact-name: 'k8s-apiserver.sbom.json'
+          output-file: './k8s-apiserver.sbom.json'
+
+      - name: Push SBOM to GHCR using ORAS
+        run: |
+          # The image digest from the build step
+          IMAGE_REF=${{ steps.build-image.outputs.digest }}
+          
+          # Push the SBOM file as an OCI artifact attached to the image
+          oras attach --artifact-type application/vnd.cyclonedx+json \
+            $IMAGE_REF \
+            ./k8s-apiserver.sbom.json
