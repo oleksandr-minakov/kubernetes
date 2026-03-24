@@ -57,4 +57,4 @@ jobs:
           # Push the SBOM file as an OCI artifact attached to the image
           oras attach --artifact-type application/vnd.cyclonedx+json \
             $IMAGE_REF \
-            ./k8s-apiserver.sbom.json:application/json
+            k8s-apiserver.sbom.json
