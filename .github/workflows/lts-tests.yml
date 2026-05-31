@@ -72,13 +72,14 @@ jobs:
           GOFLAGS: -mod=vendor -trimpath -buildvcs=false
           GOPROXY: off
           GOSUMDB: off
-          # k8s test harness flags
-          KUBE_TIMEOUT: '-timeout 600s'
-          KUBE_RACE: ''
         run: |
           set -ex
-          # Use upstream's make target directly, no rewrite.
-          make test WHAT="${{ matrix.paths }}"
+          # `make test` would call hack/make-rules/test.sh which tries to
+          # `go install` dev tools (gofumpt, unparam) — those aren't in
+          # vendor/modules.txt explicitly, so GOPROXY=off rejects the
+          # install. Bypass it by calling `go test` directly with the same
+          # path list; the harness adds nothing the build doesn't.
+          go test -timeout 600s ${{ matrix.paths }}
 
       - name: Upload junit results if produced
         if: always()
@@ -123,7 +124,11 @@ jobs:
           CGO_ENABLED: "0"
         run: |
           set -ex
+          mkdir -p _output/local/bin/linux/amd64
           for c in kube-apiserver kube-controller-manager kube-scheduler kube-proxy kubelet kubectl; do
-            make WHAT=cmd/$c KUBE_BUILD_PLATFORMS=linux/amd64
+            # Avoid `make WHAT=...` for the same reason as the unit step —
+            # k8s's build.sh wraps in setup_env / installTools layers we don't
+            # need. `go build` produces the same binary.
+            go build -o _output/local/bin/linux/amd64/$c ./cmd/$c
           done
           ls -la _output/local/bin/linux/amd64/
