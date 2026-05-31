@@ -1,0 +1,11 @@
+# Source-fork ownership. Two-person review on Tier-1 backports is enforced by
+# branch protection on lts/k8s-1.32/kubernetes-1.32 in addition to these owners.
+*                       @lts-lead @lts-eng1 @lts-eng2
+
+# k8s-core components have one shared owner set because they share this branch.
+/cmd/kube-apiserver/             @lts-eng2 @lts-lead
+/cmd/kube-controller-manager/    @lts-eng2 @lts-lead
+/cmd/kube-scheduler/             @lts-eng2 @lts-lead
+/cmd/kube-proxy/                 @lts-eng1 @lts-lead
+/cmd/kubelet/                    @lts-eng1 @lts-lead
+/cmd/kubectl/                    @lts-eng2 @lts-lead
