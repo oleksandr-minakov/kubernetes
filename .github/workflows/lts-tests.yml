@@ -1,0 +1,146 @@
+name: lts-tests
+# Per LTS plan v3 §9: source tests live in the source fork and run per backport
+# PR. This workflow runs upstream's unit tests for each of the six k8s-core
+# binaries we maintain. Build repo consumes the status of this workflow as a
+# release gate.
+#
+# Bucket A (per v3 §9): unit tests + lightweight integration that the standard
+# GHA ubuntu-latest runner can host. Bucket B (full kubelet/kube-proxy node
+# e2e, full kind e2e) is intentionally deferred — scheduled, not per-PR.
+on:
+  pull_request:
+    branches:
+      - 'lts/**'
+      - 'release-*'
+    paths-ignore:
+      - 'version.txt'
+      - 'CHANGELOG.md'
+      - '**.md'
+      - 'docs/**'
+  push:
+    branches:
+      - 'lts/**'
+      - 'release-*'
+    paths-ignore:
+      - 'version.txt'
+      - 'CHANGELOG.md'
+      - '**.md'
+      - 'docs/**'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  checks: write   # so build repo can read this workflow's check-runs
+
+jobs:
+  unit:
+    name: unit (${{ matrix.component }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: kube-apiserver
+            paths: './cmd/kube-apiserver/... ./pkg/kubeapiserver/...'
+          - component: kube-controller-manager
+            paths: './cmd/kube-controller-manager/... ./pkg/controller/...'
+          - component: kube-scheduler
+            paths: './cmd/kube-scheduler/... ./pkg/scheduler/...'
+          - component: kube-proxy
+            paths: './cmd/kube-proxy/... ./pkg/proxy/...'
+          - component: kubelet
+            paths: './cmd/kubelet/...'
+          - component: kubectl
+            paths: './cmd/kubectl/... ./staging/src/k8s.io/kubectl/...'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Derive Go version
+        id: gover
+        run: |
+          if [ -f .go-version ]; then
+            echo "version=$(cat .go-version)" >> "$GITHUB_OUTPUT"
+          else
+            # Fall back to the version in go.mod's `go ` directive
+            ver=$(awk '$1=="go" {print $2; exit}' go.mod)
+            echo "version=${ver}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '${{ steps.gover.outputs.version }}'
+          cache: false
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                       /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - name: Run unit tests (${{ matrix.paths }})
+        env:
+          # Hermetic-ish: vendored deps, no proxy fetches.
+          GOFLAGS: -mod=vendor -trimpath -buildvcs=false
+          GOPROXY: off
+          GOSUMDB: off
+        run: |
+          set -ex
+          # `make test` would call hack/make-rules/test.sh which tries to
+          # `go install` dev tools (gofumpt, unparam) — those aren't in
+          # vendor/modules.txt explicitly, so GOPROXY=off rejects the
+          # install. Bypass it by calling `go test` directly with the same
+          # path list; the harness adds nothing the build doesn't.
+          go test -timeout 600s ${{ matrix.paths }}
+
+      - name: Upload junit results if produced
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-${{ matrix.component }}
+          path: _output/**/*.xml
+          if-no-files-found: ignore
+          retention-days: 14
+
+  build:
+    # Cheap compile check across all six binaries on the same runner — confirms
+    # the LTS branch tree still produces working binaries even if a backport
+    # only touches one component.
+    name: build (compile-check all six)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Derive Go version
+        id: gover
+        run: |
+          if [ -f .go-version ]; then
+            echo "version=$(cat .go-version)" >> "$GITHUB_OUTPUT"
+          else
+            ver=$(awk '$1=="go" {print $2; exit}' go.mod)
+            echo "version=${ver}" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '${{ steps.gover.outputs.version }}'
+          cache: false
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                       /opt/hostedtoolcache/CodeQL || true
+      - name: Compile all six binaries
+        env:
+          GOFLAGS: -mod=vendor -trimpath -buildvcs=false
+          GOPROXY: off
+          GOSUMDB: off
+          CGO_ENABLED: "0"
+        run: |
+          set -ex
+          mkdir -p _output/local/bin/linux/amd64
+          for c in kube-apiserver kube-controller-manager kube-scheduler kube-proxy kubelet kubectl; do
+            # Avoid `make WHAT=...` for the same reason as the unit step —
+            # k8s's build.sh wraps in setup_env / installTools layers we don't
+            # need. `go build` produces the same binary.
+            go build -o _output/local/bin/linux/amd64/$c ./cmd/$c
+          done
+          ls -la _output/local/bin/linux/amd64/

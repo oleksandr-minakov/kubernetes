@@ -1,0 +1,86 @@
+# Mirantis LTS release cascade — step 1 of 2 (source fork).
+#
+# This workflow cuts a release tag (e.g. v1.32.13-lts.0) on the source fork
+# via release-please, then opens a follow-up PR against the build repo
+# (oleksandr-minakov/test-control-repo) writing that tag into VERSION on a
+# chore/version-<tag> branch off release-1.32. The build repo's build.yaml
+# picks up that PR merge and produces the artifacts.
+#
+# Trigger is manual-only by design (see docs/runbook-monthly-bundle.md): we
+# do NOT want every push to release-1.32 to mint a new tag. A human runs this
+# from the Actions tab once the backports for the month are merged.
+#
+# Required secret: BUILD_REPO_TOKEN — a fine-grained PAT scoped to
+# oleksandr-minakov/test-control-repo with contents:write + pull-requests:write.
+# If unset, the post-release step warns and exits 0 so the operator can open
+# the bump PR manually (prototype-friendly).
+
+name: release-please
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.rp.outputs.release_created }}
+      tag_name: ${{ steps.rp.outputs.tag_name }}
+    steps:
+      - id: rp
+        uses: googleapis/release-please-action@v4
+        with:
+          release-type: simple
+          target-branch: release-1.32
+          package-name: kubernetes-lts
+
+  bump-build-repo:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Open VERSION bump PR in build repo
+        env:
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+          GH_TOKEN: ${{ secrets.BUILD_REPO_TOKEN }}
+        run: |
+          set -e
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::warning ::BUILD_REPO_TOKEN is unset — skipping automatic VERSION bump PR."
+            echo "::warning ::Open it manually: write '${TAG}' to VERSION on branch chore/version-${TAG} in oleksandr-minakov/test-control-repo (base: release-1.32)."
+            exit 0
+          fi
+          if [ -z "${TAG}" ]; then
+            echo "::error ::tag_name output was empty even though release_created=true"
+            exit 1
+          fi
+
+          BUILD_REPO="oleksandr-minakov/test-control-repo"
+          BASE="release-1.32"
+          BRANCH="chore/version-${TAG}"
+
+          workdir="$(mktemp -d)"
+          cd "$workdir"
+          git clone --depth=1 --branch "$BASE" \
+            "https://x-access-token:${GH_TOKEN}@github.com/${BUILD_REPO}.git" build
+          cd build
+          git config user.name  "release-please-bot"
+          git config user.email "release-please-bot@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          printf '%s\n' "$TAG" > VERSION
+          git add VERSION
+          git commit \
+            -m "chore: bump VERSION to ${TAG}" \
+            -m "Cascaded from source-fork release ${TAG}. Merging this PR triggers build.yaml which produces the artifacts for this version."
+          git push -u origin "$BRANCH"
+
+          gh pr create \
+            --repo "$BUILD_REPO" \
+            --base "$BASE" \
+            --head "$BRANCH" \
+            --title "chore: bump VERSION to ${TAG}" \
+            --body "Automated bump from source-fork release-please run. Source tag: \`${TAG}\`. Merging triggers \`build.yaml\`."
